@@ -6,9 +6,13 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import org.springframework.http.MediaType;
 
 import java.util.Base64;
 
@@ -75,7 +79,7 @@ class DynamicDataControllerTest {
 
     @Test
     void testDelayEndpointTooLong() throws Exception {
-        mockMvc.perform(get("/delay/15"))
+        mockMvc.perform(get("/delay/65"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("Delay too long"));
     }
@@ -423,5 +427,100 @@ class DynamicDataControllerTest {
 
         // Validate streaming approach worked with default buffer limits
         assertTrue(result.length() >= 10000000, "Should handle large responses via streaming");
+    }
+
+    @Test
+    void testDelayPostEndpoint() throws Exception {
+        String jsonBody = "{\"test\": \"data\", \"number\": 123}";
+        
+        mockMvc.perform(post("/delay/1")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(jsonBody)
+                .param("param1", "value1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.method").value("POST"))
+                .andExpect(jsonPath("$.args.param1").value("value1"))
+                .andExpect(jsonPath("$.data").value(jsonBody))
+                .andExpect(jsonPath("$.url").exists())
+                .andExpect(jsonPath("$.origin").exists())
+                .andExpect(jsonPath("$.headers").exists());
+    }
+
+    @Test
+    void testDelayPutEndpoint() throws Exception {
+        String xmlBody = "<user><name>John</name><age>30</age></user>";
+        
+        mockMvc.perform(put("/delay/1")
+                .contentType(MediaType.APPLICATION_XML)
+                .content(xmlBody)
+                .param("action", "update"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.method").value("PUT"))
+                .andExpect(jsonPath("$.args.action").value("update"))
+                .andExpect(jsonPath("$.data").value(xmlBody))
+                .andExpect(jsonPath("$.url").exists());
+    }
+
+    @Test
+    void testDelayDeleteEndpoint() throws Exception {
+        mockMvc.perform(delete("/delay/2")
+                .param("force", "true")
+                .param("reason", "cleanup"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.method").value("DELETE"))
+                .andExpect(jsonPath("$.args.force").value("true"))
+                .andExpect(jsonPath("$.args.reason").value("cleanup"))
+                .andExpect(jsonPath("$.url").exists())
+                .andExpect(jsonPath("$.data").doesNotExist()); // DELETE should not have body
+    }
+
+    @Test
+    void testDelayGetEndpointStillWorks() throws Exception {
+        mockMvc.perform(get("/delay/1?test=value"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.method").value("GET"))
+                .andExpect(jsonPath("$.args.test").value("value"))
+                .andExpect(jsonPath("$.url").exists())
+                .andExpect(jsonPath("$.origin").exists())
+                .andExpect(jsonPath("$.headers").exists());
+    }
+
+    @Test
+    void testDelayPostWithoutBody() throws Exception {
+        mockMvc.perform(post("/delay/1")
+                .param("empty", "true"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.method").value("POST"))
+                .andExpect(jsonPath("$.args.empty").value("true"))
+                .andExpect(jsonPath("$.data").doesNotExist()); // No body provided
+    }
+
+    @Test
+    void testDelayAllMethodsTooLong() throws Exception {
+        // Test that all methods respect the 60-second limit
+        mockMvc.perform(get("/delay/65"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("Delay too long"));
+
+        mockMvc.perform(post("/delay/70"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("Delay too long"));
+
+        mockMvc.perform(put("/delay/75"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("Delay too long"));
+
+        mockMvc.perform(delete("/delay/80"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("Delay too long"));
+    }
+
+    @Test
+    void testDelayMaximumAllowedTime() throws Exception {
+        // Test that 60 seconds is still allowed
+        mockMvc.perform(get("/delay/60?test=maxtime"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.method").value("GET"))
+                .andExpect(jsonPath("$.args.test").value("maxtime"));
     }
 }
