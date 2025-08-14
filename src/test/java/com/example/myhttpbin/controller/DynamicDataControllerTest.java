@@ -1,26 +1,37 @@
 package com.example.myhttpbin.controller;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
-
 import java.util.Base64;
 
-import com.example.myhttpbin.MyhttpbinApplication;
-
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.web.servlet.MockMvc;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.core.io.buffer.DataBufferLimitException;
+import org.springframework.web.reactive.function.client.ExchangeStrategies;
 
-@SpringBootTest(classes = MyhttpbinApplication.class)
+import com.example.myhttpbin.MyhttpbinApplication;
+
+@SpringBootTest(classes = MyhttpbinApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureMockMvc
 class DynamicDataControllerTest {
 
     @Autowired private MockMvc mockMvc;
+    
+    @LocalServerPort
+    private int port;
 
     @Test
     void testUuidEndpoint() throws Exception {
@@ -101,7 +112,7 @@ class DynamicDataControllerTest {
 
     @Test
     void testBytesEndpointTooLarge() throws Exception {
-        mockMvc.perform(get("/bytes/200000"))
+        mockMvc.perform(get("/bytes/200000000"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("Size too large"));
     }
@@ -122,5 +133,203 @@ class DynamicDataControllerTest {
                 .andExpect(jsonPath("$.uuid").exists())
                 .andExpect(
                         jsonPath("$.uuid").value(org.hamcrest.Matchers.matchesPattern(uuidRegex)));
+    }
+
+    @Test
+    void testCharsEndpoint() throws Exception {
+        int numChars = 50;
+        String result = mockMvc.perform(get("/chars/" + numChars))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Type", "text/plain"))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        
+        assertEquals(numChars, result.length());
+        // Verify all characters are alphanumeric
+        assertTrue(result.matches("[a-zA-Z0-9]+"));
+    }
+
+    @Test
+    void testCharsEndpointSmallSize() throws Exception {
+        mockMvc.perform(get("/chars/5"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Type", "text/plain"));
+    }
+
+    @Test
+    void testCharsEndpointInvalidSize() throws Exception {
+        mockMvc.perform(get("/chars/0"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("Invalid size"));
+    }
+
+    @Test
+    void testCharsEndpointNegativeSize() throws Exception {
+        mockMvc.perform(get("/chars/-5"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("Invalid size"));
+    }
+
+    @Test
+    void testCharsEndpointTooLarge() throws Exception {
+        mockMvc.perform(get("/chars/20000000"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("Size too large"));
+    }
+
+    @Test
+    void testCharsEndpointRandomness() throws Exception {
+        String result1 = mockMvc.perform(get("/chars/100"))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        String result2 = mockMvc.perform(get("/chars/100"))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        // Very unlikely to be the same for 100 random characters
+        assertNotEquals(result1, result2);
+    }
+
+    @Test
+    void testCharsEndpointLargeRequestWebClient() {
+        WebClient webClient = WebClient.builder()
+                .baseUrl("http://localhost:" + port)
+                .build();
+
+        assertThatThrownBy(() -> {
+            webClient.get()
+                    .uri("/chars/10000000")
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block();
+        })
+        .hasRootCauseInstanceOf(DataBufferLimitException.class)
+        .hasRootCauseMessage("Exceeded limit on max bytes to buffer : 262144");
+    }
+
+    @Test
+    void testCharsEndpointLargeRequestWebClientManualExceptionHandling() throws Exception {
+        WebClient webClient = WebClient.builder()
+                .baseUrl("http://localhost:" + port)
+                .build();
+
+        boolean dataBufferLimitExceptionThrown = false;
+        
+        try {
+            String result = webClient.get()
+                    .uri("/chars/10000000")
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block();
+            
+            // This should not happen for 10MB request due to buffer limit
+            System.out.println("Unexpected: Request succeeded with " + result.length() + " characters");
+        } catch (Exception e) {
+            System.out.println("WebClient test caught exception: " + e.getClass().getSimpleName());
+            System.out.println("Exception message: " + e.getMessage());
+            
+            // Check if the root cause is DataBufferLimitException
+            Throwable cause = e;
+            while (cause != null) {
+                if (cause instanceof DataBufferLimitException) {
+                    dataBufferLimitExceptionThrown = true;
+                    System.out.println("Expected DataBufferLimitException caught: " + cause.getMessage());
+                    assertTrue(cause.getMessage().contains("Exceeded limit on max bytes to buffer"));
+                    break;
+                }
+                cause = cause.getCause();
+            }
+            
+            if (!dataBufferLimitExceptionThrown) {
+                System.out.println("Unexpected exception type. Full stack trace:");
+                e.printStackTrace();
+            }
+        }
+        
+        // Verify that the expected exception was thrown
+        assertTrue(dataBufferLimitExceptionThrown, 
+            "Expected DataBufferLimitException to be thrown for large response");
+    }
+
+    @Test
+    void testCharsEndpointLargeRequestWithIncreasedBufferSize() throws Exception {
+        // Configure WebClient with 12MB buffer size
+        ExchangeStrategies strategies = ExchangeStrategies.builder()
+                .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(12 * 1024 * 1024)) // 12MB
+                .build();
+
+        WebClient webClient = WebClient.builder()
+                .baseUrl("http://localhost:" + port)
+                .exchangeStrategies(strategies)
+                .build();
+
+        long startTime = System.currentTimeMillis();
+        
+        String result = webClient.get()
+                .uri("/chars/10000000") // 10MB request
+                .retrieve()
+                .bodyToMono(String.class)
+                .block();
+        
+        long endTime = System.currentTimeMillis();
+        long duration = endTime - startTime;
+
+        // Verify the response
+        assertNotNull(result, "Response should not be null");
+        assertEquals(10000000, result.length(), "Should receive exactly 10 million characters");
+        assertTrue(result.matches("[a-zA-Z0-9]+"), "All characters should be alphanumeric");
+        
+        System.out.println("Successfully received " + result.length() + " characters in " + duration + "ms");
+        System.out.println("First 100 chars: " + result.substring(0, 100));
+        System.out.println("Last 100 chars: " + result.substring(result.length() - 100));
+    }
+
+    @Test
+    void testCharsEndpointLargeRequestWithUnlimitedBuffer() throws Exception {
+        // Configure WebClient with unlimited buffer size using the Medium post approach
+        ExchangeStrategies exchangeStrategies = ExchangeStrategies.builder()
+                .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(-1)) // -1 = unlimited
+                .build();
+
+        WebClient webClient = WebClient.builder()
+                .baseUrl("http://localhost:" + port)
+                .exchangeStrategies(exchangeStrategies)
+                .build();
+
+        long startTime = System.currentTimeMillis();
+        
+        String result = webClient.get()
+                .uri("/chars/10000000") // 10MB request
+                .retrieve()
+                .bodyToMono(String.class)
+                .block();
+        
+        long endTime = System.currentTimeMillis();
+        long duration = endTime - startTime;
+
+        // Verify the response
+        assertNotNull(result, "Response should not be null");
+        assertEquals(10000000, result.length(), "Should receive exactly 10 million characters");
+        assertTrue(result.matches("[a-zA-Z0-9]+"), "All characters should be alphanumeric");
+        
+        // Memory usage information
+        Runtime runtime = Runtime.getRuntime();
+        long memoryUsed = runtime.totalMemory() - runtime.freeMemory();
+        
+        System.out.println("=== Medium Post Approach Test Results ===");
+        System.out.println("Successfully received " + result.length() + " characters in " + duration + "ms");
+        System.out.println("Memory used: " + (memoryUsed / 1024 / 1024) + " MB");
+        System.out.println("Buffer configuration: UNLIMITED (-1)");
+        System.out.println("First 50 chars: " + result.substring(0, 50));
+        System.out.println("Last 50 chars: " + result.substring(result.length() - 50));
+        
+        // Validate that we can handle very large responses
+        assertTrue(result.length() >= 10000000, "Should handle large responses without buffer limit");
     }
 }
