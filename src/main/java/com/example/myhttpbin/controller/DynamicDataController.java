@@ -9,6 +9,11 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
+import com.example.myhttpbin.dto.Base64Response;
+import com.example.myhttpbin.dto.DelayResponse;
+import com.example.myhttpbin.dto.ErrorResponse;
+import com.example.myhttpbin.dto.UuidResponse;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -16,11 +21,6 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-
-import com.example.myhttpbin.dto.Base64Response;
-import com.example.myhttpbin.dto.DelayResponse;
-import com.example.myhttpbin.dto.ErrorResponse;
-import com.example.myhttpbin.dto.UuidResponse;
 
 import jakarta.servlet.http.HttpServletRequest;
 
@@ -114,7 +114,9 @@ public class DynamicDataController {
     public ResponseEntity<?> generateChars(@PathVariable int n) {
         if (n <= 0) {
             return ResponseEntity.badRequest()
-                    .body(new ErrorResponse("Invalid size", "Number of characters must be positive"));
+                    .body(
+                            new ErrorResponse(
+                                    "Invalid size", "Number of characters must be positive"));
         }
 
         if (n > 10 * 1024 * 1024) {
@@ -124,14 +126,12 @@ public class DynamicDataController {
 
         String chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
         StringBuilder result = new StringBuilder();
-        
+
         for (int i = 0; i < n; i++) {
             int randomIndex = random.nextInt(chars.length());
             result.append(chars.charAt(randomIndex));
         }
 
-        return ResponseEntity.ok()
-                .contentType(MediaType.TEXT_PLAIN)
-                .body(result.toString());
+        return ResponseEntity.ok().contentType(MediaType.TEXT_PLAIN).body(result.toString());
     }
 }
