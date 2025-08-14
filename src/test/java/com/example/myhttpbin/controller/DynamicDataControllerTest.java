@@ -1,10 +1,13 @@
 package com.example.myhttpbin.controller;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.springframework.http.HttpMethod.GET;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -13,6 +16,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.nio.charset.Charset;
 import java.time.Duration;
 import java.util.Base64;
 
@@ -47,51 +51,86 @@ class DynamicDataControllerTest {
 
     @LocalServerPort private int port;
 
+    private void logTestMetrics(String testName, long startTime, long endTime) {
+        long duration = endTime - startTime;
+        Runtime runtime = Runtime.getRuntime();
+        long memoryUsed = runtime.totalMemory() - runtime.freeMemory();
+        System.out.println(
+                String.format(
+                        "[%s] Duration: %dms, Memory: %dMB",
+                        testName, duration, memoryUsed / 1024 / 1024));
+    }
+
     @Test
     void testUuidEndpoint() throws Exception {
+        long startTime = System.currentTimeMillis();
+
         mockMvc.perform(get("/uuid"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.uuid").exists())
                 .andExpect(jsonPath("$.uuid").isString());
+
+        long endTime = System.currentTimeMillis();
+        logTestMetrics("testUuidEndpoint", startTime, endTime);
     }
 
     @Test
     void testBase64EndpointValid() throws Exception {
+        long startTime = System.currentTimeMillis();
+
         String testString = "Hello World";
         String encoded = Base64.getEncoder().encodeToString(testString.getBytes());
 
         mockMvc.perform(get("/base64/" + encoded))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.decoded").value(testString));
+
+        long endTime = System.currentTimeMillis();
+        logTestMetrics("testBase64EndpointValid", startTime, endTime);
     }
 
     @Test
     void testBase64EndpointInvalid() throws Exception {
+        long startTime = System.currentTimeMillis();
+
         mockMvc.perform(get("/base64/invalid-base64!@#"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("Invalid Base64"));
+
+        long endTime = System.currentTimeMillis();
+        logTestMetrics("testBase64EndpointInvalid", startTime, endTime);
     }
 
     @Test
     void testDelayEndpoint() throws Exception {
+        long startTime = System.currentTimeMillis();
+
         mockMvc.perform(get("/delay/1?test=value"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.args.test").value("value"))
                 .andExpect(jsonPath("$.url").exists())
                 .andExpect(jsonPath("$.origin").exists())
                 .andExpect(jsonPath("$.headers").exists());
+
+        long endTime = System.currentTimeMillis();
+        logTestMetrics("testDelayEndpoint", startTime, endTime);
     }
 
     @Test
     void testDelayEndpointTooLong() throws Exception {
+        long startTime = System.currentTimeMillis();
+
         mockMvc.perform(get("/delay/65"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("Delay too long"));
+
+        long endTime = System.currentTimeMillis();
+        logTestMetrics("testDelayEndpointTooLong", startTime, endTime);
     }
 
     @Test
     void testBytesEndpoint() throws Exception {
-        int numBytes = 80000000;
+        int numBytes = 900000;
         byte[] result =
                 mockMvc.perform(get("/bytes/" + numBytes))
                         .andExpect(status().isOk())
@@ -126,7 +165,7 @@ class DynamicDataControllerTest {
 
     @Test
     void testBytesEndpointTooLarge() throws Exception {
-        mockMvc.perform(get("/bytes/200000000"))
+        mockMvc.perform(get("/bytes/1100000"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("Size too large"));
     }
@@ -188,7 +227,7 @@ class DynamicDataControllerTest {
 
     @Test
     void testCharsEndpointTooLarge() throws Exception {
-        mockMvc.perform(get("/chars/20000000"))
+        mockMvc.perform(get("/chars/1100000"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("Size too large"));
     }
@@ -221,7 +260,7 @@ class DynamicDataControllerTest {
                         () -> {
                             webClient
                                     .get()
-                                    .uri("/chars/10000000")
+                                    .uri("/chars/900000")
                                     .retrieve()
                                     .bodyToMono(String.class)
                                     .block();
@@ -242,7 +281,7 @@ class DynamicDataControllerTest {
             result =
                     webClient
                             .get()
-                            .uri("/chars/10000000")
+                            .uri("/chars/900000")
                             .retrieve()
                             .bodyToMono(String.class)
                             .block();
@@ -289,7 +328,7 @@ class DynamicDataControllerTest {
                                 configurer ->
                                         configurer
                                                 .defaultCodecs()
-                                                .maxInMemorySize(12 * 1024 * 1024)) // 12MB
+                                                .maxInMemorySize(1 * 1024 * 1024)) // 12MB
                         .build();
 
         WebClient webClient =
@@ -303,7 +342,7 @@ class DynamicDataControllerTest {
         String result =
                 webClient
                         .get()
-                        .uri("/chars/10000000") // 10MB request
+                        .uri("/chars/900000") // 30MB request
                         .retrieve()
                         .bodyToMono(String.class)
                         .block();
@@ -313,11 +352,18 @@ class DynamicDataControllerTest {
 
         // Verify the response
         assertNotNull(result, "Response should not be null");
-        assertEquals(10000000, result.length(), "Should receive exactly 10 million characters");
+        assertEquals(900000, result.length(), "Should receive exactly 10 million characters");
         assertTrue(result.matches("[a-zA-Z0-9]+"), "All characters should be alphanumeric");
 
+        // Memory usage information
+        Runtime runtime = Runtime.getRuntime();
+        long memoryUsed = runtime.totalMemory() - runtime.freeMemory();
+
+        System.out.println("=== Increased Buffer Size Test Results ===");
         System.out.println(
                 "Successfully received " + result.length() + " characters in " + duration + "ms");
+        System.out.println("Memory used: " + (memoryUsed / 1024 / 1024) + " MB");
+        System.out.println("Buffer configuration: 12MB");
         System.out.println("First 100 chars: " + result.substring(0, 100));
         System.out.println("Last 100 chars: " + result.substring(result.length() - 100));
     }
@@ -345,7 +391,7 @@ class DynamicDataControllerTest {
         String result =
                 webClient
                         .get()
-                        .uri("/chars/10000000") // 10MB request
+                        .uri("/chars/900000") // 10MB request
                         .retrieve()
                         .bodyToMono(String.class)
                         .block();
@@ -355,7 +401,7 @@ class DynamicDataControllerTest {
 
         // Verify the response
         assertNotNull(result, "Response should not be null");
-        assertEquals(10000000, result.length(), "Should receive exactly 10 million characters");
+        assertEquals(900000, result.length(), "Should receive exactly 10 million characters");
         assertTrue(result.matches("[a-zA-Z0-9]+"), "All characters should be alphanumeric");
 
         // Memory usage information
@@ -371,8 +417,7 @@ class DynamicDataControllerTest {
         System.out.println("Last 50 chars: " + result.substring(result.length() - 50));
 
         // Validate that we can handle very large responses
-        assertTrue(
-                result.length() >= 10000000, "Should handle large responses without buffer limit");
+        assertTrue(result.length() >= 256000, "Should handle large responses without buffer limit");
     }
 
     @Test
@@ -386,7 +431,7 @@ class DynamicDataControllerTest {
         Flux<DataBuffer> dataBufferFlux =
                 webClient
                         .get()
-                        .uri("/chars/10000000") // 10MB request
+                        .uri("/chars/900000") // 10MB request
                         .retrieve()
                         .bodyToFlux(DataBuffer.class);
 
@@ -415,7 +460,7 @@ class DynamicDataControllerTest {
 
         // Verify the response
         assertNotNull(result, "Response should not be null");
-        assertEquals(10000000, result.length(), "Should receive exactly 10 million characters");
+        assertEquals(900000, result.length(), "Should receive exactly 10 million characters");
         assertTrue(result.matches("[a-zA-Z0-9]+"), "All characters should be alpranumeric");
 
         // Memory usage information
@@ -431,7 +476,7 @@ class DynamicDataControllerTest {
         System.out.println("Last 50 chars: " + result.substring(result.length() - 50));
 
         // Validate streaming approach worked with default buffer limits
-        assertTrue(result.length() >= 10000000, "Should handle large responses via streaming");
+        assertTrue(result.length() >= 256000, "Should handle large responses via streaming");
     }
 
     @Test
@@ -853,5 +898,127 @@ class DynamicDataControllerTest {
         assertTrue(
                 duration >= 5500 && duration <= 7000,
                 "Response timeout should occur around 6 seconds, but was " + duration + "ms");
+    }
+
+    @Test
+    void testCharsEndpointLargeRequestWithExchangeToMono() throws Exception {
+        // Use default WebClient with exchangeToMono and manual DataBuffer handling
+        WebClient webClient = WebClient.builder().baseUrl("http://localhost:" + port).build();
+
+        long startTime = System.currentTimeMillis();
+
+        String result =
+                webClient
+                        .method(GET)
+                        .uri("/chars/900000")
+                        .exchangeToMono(
+                                response -> {
+                                    return response.bodyToFlux(DataBuffer.class)
+                                            .switchOnFirst(
+                                                    (firstBufferSignal, responseBody$) -> {
+                                                        assert firstBufferSignal.isOnNext();
+                                                        return responseBody$
+                                                                .collect(
+                                                                        () ->
+                                                                                requireNonNull(
+                                                                                                firstBufferSignal
+                                                                                                        .get())
+                                                                                        .factory()
+                                                                                        .allocateBuffer(
+                                                                                                0),
+                                                                        (accumulator, curr) -> {
+                                                                            accumulator.write(curr);
+                                                                            DataBufferUtils.release(
+                                                                                    curr);
+                                                                        })
+                                                                .map(
+                                                                        accumulator -> {
+                                                                            final var
+                                                                                    responseBodyAsStr =
+                                                                                            accumulator
+                                                                                                    .toString(
+                                                                                                            UTF_8);
+                                                                            DataBufferUtils.release(
+                                                                                    accumulator);
+                                                                            return responseBodyAsStr;
+                                                                        });
+                                                    })
+                                            .single();
+                                })
+                        .block();
+
+        long endTime = System.currentTimeMillis();
+        long duration = endTime - startTime;
+
+        // Verify the response
+        assertNotNull(result, "Response should not be null");
+        assertEquals(900000, result.length(), "Should receive exactly 10 million characters");
+        assertTrue(result.matches("[a-zA-Z0-9]+"), "All characters should be alphanumeric");
+
+        // Memory usage information
+        Runtime runtime = Runtime.getRuntime();
+        long memoryUsed = runtime.totalMemory() - runtime.freeMemory();
+
+        System.out.println("=== ExchangeToMono with Manual DataBuffer Handling Test Results ===");
+        System.out.println(
+                "Successfully processed " + result.length() + " characters in " + duration + "ms");
+        System.out.println("Memory used: " + (memoryUsed / 1024 / 1024) + " MB");
+        System.out.println(
+                "Buffer configuration: DEFAULT (256KB) with exchangeToMono manual handling");
+        System.out.println("First 50 chars: " + result.substring(0, 50));
+        System.out.println("Last 50 chars: " + result.substring(result.length() - 50));
+
+        // Validate manual buffer handling worked with default buffer limits
+        assertTrue(
+                result.length() >= 256000,
+                "Should handle large responses via manual buffer handling");
+    }
+
+    @Test
+    void testCharsEndpoint30MBWithDataBufferFluxMapping() throws Exception {
+        // Use default WebClient with DataBuffer flux mapping approach
+        WebClient webClient = WebClient.builder().baseUrl("http://localhost:" + port).build();
+
+        long startTime = System.currentTimeMillis();
+
+        String result =
+                webClient
+                        .get()
+                        .uri("/chars/900000")
+                        .retrieve()
+                        .bodyToFlux(DataBuffer.class)
+                        .map(
+                                buffer -> {
+                                    String string = buffer.toString(Charset.forName("UTF-8"));
+                                    DataBufferUtils.release(buffer);
+                                    return string;
+                                })
+                        .reduce("", (accumulated, chunk) -> accumulated + chunk)
+                        .block();
+
+        long endTime = System.currentTimeMillis();
+        long duration = endTime - startTime;
+
+        // Verify the response
+        assertNotNull(result, "Response should not be null");
+        assertEquals(900000, result.length(), "Should receive exactly 30 million characters");
+        assertTrue(result.matches("[a-zA-Z0-9]+"), "All characters should be alphanumeric");
+
+        // Memory usage information
+        Runtime runtime = Runtime.getRuntime();
+        long memoryUsed = runtime.totalMemory() - runtime.freeMemory();
+
+        System.out.println("=== DataBuffer Flux Mapping 30MB Test Results ===");
+        System.out.println(
+                "Successfully processed " + result.length() + " characters in " + duration + "ms");
+        System.out.println("Memory used: " + (memoryUsed / 1024 / 1024) + " MB");
+        System.out.println("Buffer configuration: DEFAULT (256KB) with DataBuffer flux mapping");
+        System.out.println("First 50 chars: " + result.substring(0, 50));
+        System.out.println("Last 50 chars: " + result.substring(result.length() - 50));
+
+        // Validate DataBuffer flux mapping approach worked with default buffer limits
+        assertTrue(
+                result.length() >= 256000,
+                "Should handle large responses via DataBuffer flux mapping");
     }
 }

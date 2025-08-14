@@ -150,7 +150,7 @@ public class DynamicDataController {
                     .body(new ErrorResponse("Invalid size", "Number of bytes must be positive"));
         }
 
-        if (n > 100 * 1024 * 1024) {
+        if (n > 1 * 1024 * 1024) {
             return ResponseEntity.badRequest()
                     .body(new ErrorResponse("Size too large", "Maximum size is 100KB"));
         }
@@ -172,7 +172,7 @@ public class DynamicDataController {
                                     "Invalid size", "Number of characters must be positive"));
         }
 
-        if (n > 10 * 1024 * 1024) {
+        if (n > 1 * 1024 * 1024) {
             return ResponseEntity.badRequest()
                     .body(new ErrorResponse("Size too large", "Maximum size is 100KB"));
         }
