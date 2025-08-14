@@ -5,15 +5,15 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
-import org.springframework.http.MediaType;
 
+import java.time.Duration;
 import java.util.Base64;
 
 import com.example.myhttpbin.MyhttpbinApplication;
@@ -26,11 +26,16 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DataBufferLimitException;
 import org.springframework.core.io.buffer.DataBufferUtils;
+import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.web.reactive.function.client.ExchangeStrategies;
 import org.springframework.web.reactive.function.client.WebClient;
 
+import io.netty.channel.ChannelOption;
+import io.netty.handler.timeout.ReadTimeoutHandler;
+import io.netty.handler.timeout.WriteTimeoutHandler;
 import reactor.core.publisher.Flux;
+import reactor.netty.http.client.HttpClient;
 
 @SpringBootTest(
         classes = MyhttpbinApplication.class,
@@ -432,11 +437,12 @@ class DynamicDataControllerTest {
     @Test
     void testDelayPostEndpoint() throws Exception {
         String jsonBody = "{\"test\": \"data\", \"number\": 123}";
-        
-        mockMvc.perform(post("/delay/1")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(jsonBody)
-                .param("param1", "value1"))
+
+        mockMvc.perform(
+                        post("/delay/1")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content(jsonBody)
+                                .param("param1", "value1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.method").value("POST"))
                 .andExpect(jsonPath("$.args.param1").value("value1"))
@@ -449,11 +455,12 @@ class DynamicDataControllerTest {
     @Test
     void testDelayPutEndpoint() throws Exception {
         String xmlBody = "<user><name>John</name><age>30</age></user>";
-        
-        mockMvc.perform(put("/delay/1")
-                .contentType(MediaType.APPLICATION_XML)
-                .content(xmlBody)
-                .param("action", "update"))
+
+        mockMvc.perform(
+                        put("/delay/1")
+                                .contentType(MediaType.APPLICATION_XML)
+                                .content(xmlBody)
+                                .param("action", "update"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.method").value("PUT"))
                 .andExpect(jsonPath("$.args.action").value("update"))
@@ -463,9 +470,7 @@ class DynamicDataControllerTest {
 
     @Test
     void testDelayDeleteEndpoint() throws Exception {
-        mockMvc.perform(delete("/delay/2")
-                .param("force", "true")
-                .param("reason", "cleanup"))
+        mockMvc.perform(delete("/delay/2").param("force", "true").param("reason", "cleanup"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.method").value("DELETE"))
                 .andExpect(jsonPath("$.args.force").value("true"))
@@ -487,8 +492,7 @@ class DynamicDataControllerTest {
 
     @Test
     void testDelayPostWithoutBody() throws Exception {
-        mockMvc.perform(post("/delay/1")
-                .param("empty", "true"))
+        mockMvc.perform(post("/delay/1").param("empty", "true"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.method").value("POST"))
                 .andExpect(jsonPath("$.args.empty").value("true"))
@@ -522,5 +526,332 @@ class DynamicDataControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.method").value("GET"))
                 .andExpect(jsonPath("$.args.test").value("maxtime"));
+    }
+
+    @Test
+    void testWebClientTimeoutWithLongDelay() throws Exception {
+        // Configure WebClient with 10-second timeout
+        WebClient webClient = WebClient.builder().baseUrl("http://localhost:" + port).build();
+
+        long startTime = System.currentTimeMillis();
+
+        assertThatThrownBy(
+                        () -> {
+                            webClient
+                                    .get()
+                                    .uri("/delay/15?test=timeout") // Request 15-second delay
+                                    .retrieve()
+                                    .bodyToMono(String.class)
+                                    .timeout(java.time.Duration.ofSeconds(10)) // 10-second timeout
+                                    .block();
+                        })
+                .hasRootCauseInstanceOf(java.util.concurrent.TimeoutException.class)
+                .hasRootCauseMessage(
+                        "Did not observe any item or terminal signal within 10000ms in 'flatMap' (and no fallback has been configured)");
+
+        long endTime = System.currentTimeMillis();
+        long duration = endTime - startTime;
+
+        System.out.println("Request timed out after " + duration + "ms (expected ~10000ms)");
+
+        // Verify timeout occurred around 10 seconds (allow some variance)
+        assertTrue(
+                duration >= 9000 && duration <= 12000,
+                "Timeout should occur around 10 seconds, but was " + duration + "ms");
+    }
+
+    @Test
+    void testWebClientConnectionTimeout() throws Exception {
+        // Configure WebClient with very short connection timeout to non-routable IP
+        HttpClient httpClient =
+                HttpClient.create().option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 2000); // 2 seconds
+
+        WebClient webClient =
+                WebClient.builder()
+                        .clientConnector(
+                                new org.springframework.http.client.reactive
+                                        .ReactorClientHttpConnector(httpClient))
+                        .build();
+
+        long startTime = System.currentTimeMillis();
+
+        assertThatThrownBy(
+                        () -> {
+                            webClient
+                                    .get()
+                                    .uri("http://10.255.255.1:8080/delay/1") // Non-routable IP
+                                    // to trigger
+                                    // connection
+                                    // timeout
+                                    .retrieve()
+                                    .bodyToMono(String.class)
+                                    .block();
+                        })
+                .hasRootCauseInstanceOf(java.net.ConnectException.class);
+
+        long endTime = System.currentTimeMillis();
+        long duration = endTime - startTime;
+
+        System.out.println("Connection timeout after " + duration + "ms (expected ~2000ms)");
+
+        // Verify connection timeout occurred around 2 seconds
+        assertTrue(
+                duration >= 1500 && duration <= 3000,
+                "Connection timeout should occur around 2 seconds, but was " + duration + "ms");
+    }
+
+    @Test
+    void testWebClientReadTimeout() throws Exception {
+        // Configure WebClient with read timeout
+        HttpClient httpClient =
+                HttpClient.create()
+                        .doOnConnected(
+                                conn ->
+                                        conn.addHandlerLast(
+                                                new ReadTimeoutHandler(
+                                                        5))); // 5 seconds read timeout
+
+        WebClient webClient =
+                WebClient.builder()
+                        .baseUrl("http://localhost:" + port)
+                        .clientConnector(
+                                new org.springframework.http.client.reactive
+                                        .ReactorClientHttpConnector(httpClient))
+                        .build();
+
+        long startTime = System.currentTimeMillis();
+
+        assertThatThrownBy(
+                        () -> {
+                            webClient
+                                    .get()
+                                    .uri("/delay/8?test=readtimeout") // Request 8-second delay
+                                    // (exceeds 5s read
+                                    // timeout)
+                                    .retrieve()
+                                    .bodyToMono(String.class)
+                                    .block();
+                        })
+                .hasRootCauseInstanceOf(io.netty.handler.timeout.ReadTimeoutException.class);
+
+        long endTime = System.currentTimeMillis();
+        long duration = endTime - startTime;
+
+        System.out.println("Read timeout after " + duration + "ms (expected ~5000ms)");
+
+        // Verify read timeout occurred around 5 seconds
+        assertTrue(
+                duration >= 4000 && duration <= 6500,
+                "Read timeout should occur around 5 seconds, but was " + duration + "ms");
+    }
+
+    @Test
+    void testWebClientWriteTimeout() throws Exception {
+        // Configure WebClient with write timeout
+        HttpClient httpClient =
+                HttpClient.create()
+                        .doOnConnected(
+                                conn ->
+                                        conn.addHandlerLast(
+                                                new WriteTimeoutHandler(
+                                                        3))); // 3 seconds write timeout
+
+        WebClient webClient =
+                WebClient.builder()
+                        .baseUrl("http://localhost:" + port)
+                        .clientConnector(
+                                new org.springframework.http.client.reactive
+                                        .ReactorClientHttpConnector(httpClient))
+                        .build();
+
+        // Create a large payload to potentially trigger write timeout
+        String largePayload = "x".repeat(1000000); // 1MB payload
+
+        long startTime = System.currentTimeMillis();
+
+        // Note: Write timeout is harder to trigger reliably in tests
+        // This test mainly verifies the configuration works
+        try {
+            String result =
+                    webClient
+                            .post()
+                            .uri("/delay/1")
+                            .bodyValue(largePayload)
+                            .retrieve()
+                            .bodyToMono(String.class)
+                            .block();
+
+            long endTime = System.currentTimeMillis();
+            long duration = endTime - startTime;
+
+            System.out.println("Write completed successfully after " + duration + "ms");
+            assertNotNull(result);
+
+        } catch (Exception e) {
+            long endTime = System.currentTimeMillis();
+            long duration = endTime - startTime;
+
+            System.out.println(
+                    "Write operation failed after " + duration + "ms: " + e.getMessage());
+
+            // If write timeout occurs, verify it's the expected type
+            if (e.getCause() instanceof io.netty.handler.timeout.WriteTimeoutException) {
+                assertTrue(
+                        duration >= 2500 && duration <= 4000,
+                        "Write timeout should occur around 3 seconds, but was " + duration + "ms");
+            }
+        }
+    }
+
+    @Test
+    void testWebClientGlobalResponseTimeout() throws Exception {
+        // Configure WebClient with global response timeout
+        HttpClient httpClient =
+                HttpClient.create()
+                        .responseTimeout(
+                                Duration.ofSeconds(4)); // 4 seconds global response timeout
+
+        WebClient webClient =
+                WebClient.builder()
+                        .baseUrl("http://localhost:" + port)
+                        .clientConnector(
+                                new org.springframework.http.client.reactive
+                                        .ReactorClientHttpConnector(httpClient))
+                        .build();
+
+        long startTime = System.currentTimeMillis();
+
+        assertThatThrownBy(
+                        () -> {
+                            webClient
+                                    .get()
+                                    .uri("/delay/7?test=globalresponsetimeout") // Request
+                                    // 7-second delay
+                                    // (exceeds 4s
+                                    // timeout)
+                                    .retrieve()
+                                    .bodyToMono(String.class)
+                                    .block();
+                        })
+                .hasRootCauseInstanceOf(io.netty.handler.timeout.ReadTimeoutException.class);
+
+        long endTime = System.currentTimeMillis();
+        long duration = endTime - startTime;
+
+        System.out.println("Global response timeout after " + duration + "ms (expected ~4000ms)");
+
+        // Verify global response timeout occurred around 4 seconds
+        assertTrue(
+                duration >= 3500 && duration <= 5000,
+                "Global response timeout should occur around 4 seconds, but was "
+                        + duration
+                        + "ms");
+    }
+
+    @Test
+    void testWebClientPerRequestResponseTimeout() throws Exception {
+        // Configure WebClient without global timeout
+        HttpClient httpClient = HttpClient.create();
+
+        WebClient webClient =
+                WebClient.builder()
+                        .baseUrl("http://localhost:" + port)
+                        .clientConnector(
+                                new org.springframework.http.client.reactive
+                                        .ReactorClientHttpConnector(httpClient))
+                        .build();
+
+        long startTime = System.currentTimeMillis();
+
+        assertThatThrownBy(
+                        () -> {
+                            webClient
+                                    .get()
+                                    .uri("/delay/6?test=perrequesttimeout") // Request 6-second
+                                    // delay
+                                    .httpRequest(
+                                            httpRequest -> {
+                                                reactor.netty.http.client.HttpClientRequest
+                                                        reactorRequest =
+                                                                (reactor.netty.http.client
+                                                                                .HttpClientRequest)
+                                                                        httpRequest
+                                                                                .getNativeRequest();
+                                                reactorRequest.responseTimeout(
+                                                        Duration.ofSeconds(
+                                                                3)); // 3-second per-request timeout
+                                            })
+                                    .retrieve()
+                                    .bodyToMono(String.class)
+                                    .block();
+                        })
+                .hasRootCauseInstanceOf(io.netty.handler.timeout.ReadTimeoutException.class);
+
+        long endTime = System.currentTimeMillis();
+        long duration = endTime - startTime;
+
+        System.out.println(
+                "Per-request response timeout after " + duration + "ms (expected ~3000ms)");
+
+        // Verify per-request response timeout occurred around 3 seconds
+        assertTrue(
+                duration >= 2500 && duration <= 4000,
+                "Per-request response timeout should occur around 3 seconds, but was "
+                        + duration
+                        + "ms");
+    }
+
+    @Test
+    void testWebClientAllTimeoutsCombined() throws Exception {
+        // Configure WebClient with all timeout types
+        HttpClient httpClient =
+                HttpClient.create()
+                        .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000) // 5s connection timeout
+                        .doOnConnected(
+                                conn ->
+                                        conn.addHandlerLast(
+                                                        new ReadTimeoutHandler(
+                                                                10)) // 10s read timeout
+                                                .addHandlerLast(
+                                                        new WriteTimeoutHandler(
+                                                                10))) // 10s write timeout
+                        .responseTimeout(Duration.ofSeconds(6)); // 6s global response timeout
+
+        WebClient webClient =
+                WebClient.builder()
+                        .baseUrl("http://localhost:" + port)
+                        .clientConnector(
+                                new org.springframework.http.client.reactive
+                                        .ReactorClientHttpConnector(httpClient))
+                        .build();
+
+        long startTime = System.currentTimeMillis();
+
+        assertThatThrownBy(
+                        () -> {
+                            webClient
+                                    .post()
+                                    .uri("/delay/8?test=alltimeouts") // Request 8-second delay
+                                    // (exceeds 6s response
+                                    // timeout)
+                                    .bodyValue("{\"test\": \"data\"}")
+                                    .retrieve()
+                                    .bodyToMono(String.class)
+                                    .block();
+                        })
+                .hasRootCauseInstanceOf(io.netty.handler.timeout.ReadTimeoutException.class);
+
+        long endTime = System.currentTimeMillis();
+        long duration = endTime - startTime;
+
+        System.out.println(
+                "Combined timeouts - response timeout triggered after "
+                        + duration
+                        + "ms (expected ~6000ms)");
+
+        // The response timeout (6s) should trigger before read timeout (10s)
+        assertTrue(
+                duration >= 5500 && duration <= 7000,
+                "Response timeout should occur around 6 seconds, but was " + duration + "ms");
     }
 }

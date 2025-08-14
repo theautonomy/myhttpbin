@@ -9,6 +9,10 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
+import com.example.myhttpbin.dto.Base64Response;
+import com.example.myhttpbin.dto.ErrorResponse;
+import com.example.myhttpbin.dto.UuidResponse;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -20,10 +24,6 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-
-import com.example.myhttpbin.dto.Base64Response;
-import com.example.myhttpbin.dto.ErrorResponse;
-import com.example.myhttpbin.dto.UuidResponse;
 
 import jakarta.servlet.http.HttpServletRequest;
 
@@ -54,28 +54,35 @@ public class DynamicDataController {
     }
 
     @GetMapping("/delay/{seconds}")
-    public ResponseEntity<?> delayGetResponse(@PathVariable int seconds, HttpServletRequest request) {
+    public ResponseEntity<?> delayGetResponse(
+            @PathVariable int seconds, HttpServletRequest request) {
         return handleDelayRequest(seconds, request, "GET", null);
     }
 
     @PostMapping("/delay/{seconds}")
-    public ResponseEntity<?> delayPostResponse(@PathVariable int seconds, HttpServletRequest request, 
+    public ResponseEntity<?> delayPostResponse(
+            @PathVariable int seconds,
+            HttpServletRequest request,
             @RequestBody(required = false) String body) {
         return handleDelayRequest(seconds, request, "POST", body);
     }
 
     @PutMapping("/delay/{seconds}")
-    public ResponseEntity<?> delayPutResponse(@PathVariable int seconds, HttpServletRequest request,
+    public ResponseEntity<?> delayPutResponse(
+            @PathVariable int seconds,
+            HttpServletRequest request,
             @RequestBody(required = false) String body) {
         return handleDelayRequest(seconds, request, "PUT", body);
     }
 
     @DeleteMapping("/delay/{seconds}")
-    public ResponseEntity<?> delayDeleteResponse(@PathVariable int seconds, HttpServletRequest request) {
+    public ResponseEntity<?> delayDeleteResponse(
+            @PathVariable int seconds, HttpServletRequest request) {
         return handleDelayRequest(seconds, request, "DELETE", null);
     }
 
-    private ResponseEntity<?> handleDelayRequest(int seconds, HttpServletRequest request, String method, String body) {
+    private ResponseEntity<?> handleDelayRequest(
+            int seconds, HttpServletRequest request, String method, String body) {
         if (seconds > 60) {
             return ResponseEntity.badRequest()
                     .body(new ErrorResponse("Delay too long", "Maximum delay is 60 seconds"));
@@ -117,7 +124,7 @@ public class DynamicDataController {
         responseData.put("origin", origin);
         responseData.put("url", url);
         responseData.put("method", method);
-        
+
         if (body != null && !body.trim().isEmpty()) {
             responseData.put("data", body);
             responseData.put("json", parseJsonSafely(body));
